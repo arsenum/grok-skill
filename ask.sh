@@ -48,11 +48,16 @@ prompt_file="$(mktemp "$work/prompt.XXXXXX")"
 trap 'rm -f "$prompt_file"' EXIT
 printf '%s' "$prompt" > "$prompt_file"
 
-# Chat only: web tools, no shell/file tools, no subagents.
-# Always ask for JSON: plain mode once printed only the opening line with no
-# stop reason. For plain, print .text and surface any early stop.
-args=(--prompt-file "$prompt_file" --verbatim --output-format json
-      --tools web_search,web_fetch --disallowed-tools Agent --no-subagents --no-plan
+# Search only. Grok's X search (x_keyword_search, x_semantic_search, ...) is
+# server-side and only survives without --tools: any --tools allowlist drops
+# it, and an unrecognized name there silently grants the full toolset. So deny
+# every client tool except web_search/web_fetch, and the driver below refuses
+# to run if Grok still announces anything else.
+deny=run_terminal_cmd,read_file,search_replace,list_dir,grep,todo_write,task,write
+deny+=,monitor,workflow,enter_plan_mode,exit_plan_mode,ask_user_question,send_feedback
+deny+=,image_gen,image_edit,image_to_video,reference_to_video,search_tool,use_tool,Agent
+args=(--prompt-file "$prompt_file" --verbatim --output-format streaming-json
+      --disallowed-tools "$deny" --no-subagents --no-plan
       --max-turns 20 --no-auto-update --no-alt-screen --cwd "$work")
 [[ -n "$model" ]] && args+=(-m "$model")
 [[ -n "$effort" ]] && args+=(--reasoning-effort "$effort")
@@ -68,30 +73,51 @@ if [[ -n "$name" ]]; then
   fi
 fi
 
+# Reads Grok's event stream: kills it if it exposes a non-allowlisted tool,
+# prints the answer (or the final JSON object with --json), reports early stops.
+driver='
+import json, subprocess, sys
+ALLOWED = {"web_search", "web_fetch"}
+fmt, cmd = sys.argv[1], sys.argv[2:]
+p = subprocess.Popen(cmd, stdout=subprocess.PIPE, text=True)
+text, end = [], None
+for line in p.stdout:
+    try:
+        e = json.loads(line)
+    except ValueError:
+        continue
+    t = e.get("type")
+    if t == "available_commands":
+        extra = sorted(set(e.get("tools") or []) - ALLOWED)
+        if extra:
+            p.kill()
+            sys.exit("ask.sh: refusing to run, grok exposed non-search tools: " + ", ".join(extra))
+    elif t == "text":
+        text.append(e.get("data", ""))
+    elif t == "end":
+        end = e
+    elif t == "error":
+        print("grok: " + str(e.get("message")), file=sys.stderr)
+rc = p.wait()
+if end is None:
+    sys.exit(rc or 1)
+answer = "".join(text)
+if fmt == "json":
+    end["text"] = answer
+    print(json.dumps(end, indent=2))
+else:
+    print(answer)
+    if end.get("stopReason") != "end_turn":
+        print("[grok stopped early: stopReason=%s, turns=%s]" % (end.get("stopReason"), end.get("num_turns")), file=sys.stderr)
+'
+
 # No XAI_API_KEY so the subscription login is used, never API billing; and
 # don't import the user's Claude config (CLAUDE.md, skills, MCPs, hooks).
-out="$(env -u XAI_API_KEY \
+env -u XAI_API_KEY \
   GROK_CLAUDE_AGENTS_ENABLED=false GROK_CLAUDE_SKILLS_ENABLED=false \
   GROK_CLAUDE_MCPS_ENABLED=false GROK_CLAUDE_HOOKS_ENABLED=false \
   GROK_CLAUDE_RULES_ENABLED=false \
-  "$grok" "${args[@]}")" || { rc=$?; [[ -n "${out:-}" ]] && printf '%s\n' "$out"; exit "$rc"; }
-
-if [[ "$fmt" == json ]]; then
-  printf '%s\n' "$out"
-else
-  printf '%s' "$out" | python3 -c '
-import json, sys
-raw = sys.stdin.read()
-try:
-    d = json.loads(raw)
-except ValueError:
-    sys.stdout.write(raw + "\n"); sys.exit(0)
-print(d.get("text", ""))
-stop, turns = d.get("stopReason"), d.get("num_turns")
-if stop != "end_turn":
-    print(f"[grok stopped early: stopReason={stop}, turns={turns}]", file=sys.stderr)
-'
-fi
+  python3 -c "$driver" "$fmt" "$grok" "${args[@]}"
 
 [[ -n "$new_session" ]] && printf '%s\n' "$new_session" > "$work/sessions/$name"
 exit 0

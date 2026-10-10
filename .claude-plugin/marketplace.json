@@ -1,0 +1,15 @@
+{
+  "name": "arsenum",
+  "description": "Claude Code plugins by Arsenum",
+  "owner": {
+    "name": "Arsenum",
+    "url": "https://github.com/arsenum"
+  },
+  "plugins": [
+    {
+      "name": "grok",
+      "source": "./",
+      "description": "Ask Grok via the official Grok Build CLI using your SuperGrok / X Premium+ login (no API key)"
+    }
+  ]
+}

@@ -1,0 +1,14 @@
+{
+  "name": "grok",
+  "displayName": "Grok",
+  "version": "1.0.0",
+  "description": "Ask Grok via the official Grok Build CLI using your SuperGrok / X Premium+ login (no API key)",
+  "author": {
+    "name": "Arsenum",
+    "url": "https://github.com/arsenum"
+  },
+  "homepage": "https://github.com/arsenum/grok-skill",
+  "repository": "https://github.com/arsenum/grok-skill",
+  "license": "MIT",
+  "keywords": ["grok", "xai", "grok-build", "second-opinion"]
+}
